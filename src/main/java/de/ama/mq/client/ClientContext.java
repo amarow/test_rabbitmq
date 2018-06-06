@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class ClientContext {
+    private Object monitor = new Object();
     private Connection connection;
     private Channel channel;
     private RpcClient rpcClient;
@@ -74,7 +75,9 @@ public class ClientContext {
 
     <T extends RemoteObject> RemoteObjectProxyIfc createRemoteObjectProxy(Class<T> ifc, CreateResult result) {
         RemoteObjectProxyIfc serviceProxy = (RemoteObjectProxyIfc) java.lang.reflect.Proxy.newProxyInstance(ifc.getClassLoader(), new Class[]{ifc,RemoteObjectProxyIfc.class}, new RemoteObjectProxy(result.getId()));
-        serviceProxies.add(serviceProxy);
+        synchronized (monitor){
+            serviceProxies.add(serviceProxy);
+        }
         return serviceProxy;
     }
 
@@ -83,7 +86,7 @@ public class ClientContext {
         RemoteObjectProxyIfc proxy = (RemoteObjectProxyIfc) remoteObject;
         ReleaseCall mqMessage = new ReleaseCall(proxy.getId());
         callServer(mqMessage);
-        serviceProxies.remove(remoteObject);
+        removeProxy(remoteObject);
     }
 
     public void close() {
@@ -109,6 +112,18 @@ public class ClientContext {
         if (mqData instanceof ErrorResult) {
             ErrorResult errorResponse = (ErrorResult) mqData;
             throw new RuntimeException("Error from ServerContext: " + errorResponse.getErrorMsg());
+        }
+    }
+
+    private void removeProxy(RemoteObject toRemove) {
+        ArrayList<RemoteObjectProxyIfc> temp = new ArrayList<>();
+        for (RemoteObjectProxyIfc serviceProxy : serviceProxies) {
+            if (toRemove!=serviceProxy){
+                temp.add(serviceProxy);
+            }
+        }
+        synchronized (monitor){
+            serviceProxies=temp;
         }
     }
 }

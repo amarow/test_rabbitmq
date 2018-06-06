@@ -12,7 +12,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class ServerContext {
-    private Map<Integer, RemoteObject> serviceMap = new HashMap<>();
+    private Map<Integer, RemoteObject> remoteObjectMap = new HashMap<>();
     private int idGenerator = 1;
 
     private Connection connection;
@@ -55,9 +55,9 @@ public class ServerContext {
                 return new CreateResult(id);
             } else if (data instanceof MethodCall) {
                 MethodCall call = (MethodCall) data;
-                RemoteObject service = getService(call.getServiceId());
-                Method method = service.getClass().getMethod(call.getServiceMethodName(), call.getParameterTypes());
-                Object result = method.invoke(service, call.getParameters());
+                RemoteObject remoteObject = getRemoteObject(call.getServiceId());
+                Method method = remoteObject.getClass().getMethod(call.getServiceMethodName(), call.getParameterTypes());
+                Object result = method.invoke(remoteObject, call.getParameters());
                 if (result instanceof RemoteObject){
                     return new CreateResult(registerRemoteObject((RemoteObject) result));
                 } else {
@@ -65,7 +65,7 @@ public class ServerContext {
                 }
             } else if (data instanceof ReleaseCall) {
                 ReleaseCall call = (ReleaseCall) data;
-                releaseService(call.getServiceId());
+                releaseRemoteObect(call.getServiceId());
                 return new Streamable();
             } else {
                 return new ErrorResult("unhandled call");
@@ -89,16 +89,26 @@ public class ServerContext {
 
     private int registerRemoteObject(RemoteObject remoteObject) {
         int id = ++idGenerator;
-        serviceMap.put(id, remoteObject);
+        synchronized (remoteObjectMap){
+            remoteObjectMap.put(id, remoteObject);
+        }
+        System.out.println("registered remote object: "+remoteObject.getClass().getSimpleName() + " id="+id);
         return id;
     }
 
-    private RemoteObject getService(int serviceId) {
-        return serviceMap.get(serviceId);
+    private RemoteObject getRemoteObject(int id) {
+        synchronized (remoteObjectMap) {
+            RemoteObject remoteObject = remoteObjectMap.get(id);
+            return remoteObject;
+        }
     }
 
-    private void releaseService(int serviceId) {
-        serviceMap.remove(serviceId);
+    private void releaseRemoteObect(int id) {
+        RemoteObject remoteObject;
+        synchronized (remoteObjectMap){
+            remoteObject = remoteObjectMap.remove(id);
+        }
+        System.out.println("released remote object: "+remoteObject.getClass().getSimpleName() + " id="+id);
     }
 
 
