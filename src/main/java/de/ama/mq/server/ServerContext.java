@@ -11,9 +11,14 @@ import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.Map;
 
+/**
+ * Der {@link ServerContext} verwaltet alle serverseitigen {@link RemoteObject}e. Die {@link RemoteObject}e sind über
+ * eine objectId mit einem clientseitigen Proxy verbunden. Clientseitige Aufrufe auf dem Proxy werden an das serverseitige
+ * {@link RemoteObject} weitergegeben.
+ */
 public class ServerContext {
     private Map<Integer, RemoteObject> remoteObjectMap = new HashMap<>();
-    private int idGenerator = 1;
+    private static int idGenerator = 1;
 
     private Connection connection;
     private Channel channel;
@@ -49,23 +54,23 @@ public class ServerContext {
 
     private Streamable executeCall(Streamable data) {
         try {
-            if (data instanceof CreateCall) {
-                CreateCall call = (CreateCall) data;
-                int id = createRemoteObject(call.getServiceClassName());
+            if (data instanceof CreateParams) {
+                CreateParams call = (CreateParams) data;
+                int id = createRemoteObject(call.getClassName());
                 return new CreateResult(id);
-            } else if (data instanceof MethodCall) {
-                MethodCall call = (MethodCall) data;
-                RemoteObject remoteObject = getRemoteObject(call.getServiceId());
-                Method method = remoteObject.getClass().getMethod(call.getServiceMethodName(), call.getParameterTypes());
-                Object result = method.invoke(remoteObject, call.getParameters());
+            } else if (data instanceof MethodParams) {
+                MethodParams params = (MethodParams) data;
+                RemoteObject remoteObject = getRemoteObject(params.getObjectId());
+                Method method = remoteObject.getClass().getMethod(params.getMethodName(), params.getParameterTypes());
+                Object result = method.invoke(remoteObject, params.getParameters());
                 if (result instanceof RemoteObject){
                     return new CreateResult(registerRemoteObject((RemoteObject) result));
                 } else {
                     return new MethodResult(result);
                 }
-            } else if (data instanceof ReleaseCall) {
-                ReleaseCall call = (ReleaseCall) data;
-                releaseRemoteObect(call.getServiceId());
+            } else if (data instanceof ReleaseParams) {
+                ReleaseParams call = (ReleaseParams) data;
+                releaseRemoteObect(call.getObjectId());
                 return new Streamable();
             } else {
                 return new ErrorResult("unhandled call");

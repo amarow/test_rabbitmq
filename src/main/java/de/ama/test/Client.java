@@ -22,7 +22,7 @@ public class Client {
         System.out.println("laender = " + laender);
 
 
-        ClientContext.get().releaseService(service);
+        ClientContext.get().releaseRemoteObject(service);
     }
 
 }

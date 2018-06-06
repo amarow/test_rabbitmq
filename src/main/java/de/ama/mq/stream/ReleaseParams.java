@@ -1,10 +1,9 @@
 package de.ama.mq.stream;
 
-public class CreateResult extends Streamable {
+public class ReleaseParams extends Streamable {
     private int objectId;
 
-
-    public CreateResult(int objectId) {
+    public ReleaseParams(int objectId) {
         this.objectId = objectId;
     }
 

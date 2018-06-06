@@ -1,7 +1,7 @@
 package de.ama.mq.client;
 
 import de.ama.mq.stream.CreateResult;
-import de.ama.mq.stream.MethodCall;
+import de.ama.mq.stream.MethodParams;
 import de.ama.mq.stream.MethodResult;
 import de.ama.mq.stream.Streamable;
 
@@ -9,24 +9,24 @@ import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 
 public class RemoteObjectProxy implements InvocationHandler,RemoteObjectProxyIfc {
-    private int id;
+    private int objectId;
 
-    RemoteObjectProxy(int id) {
-        this.id = id;
+    RemoteObjectProxy(int objectId) {
+        this.objectId = objectId;
     }
 
-    public int getId() {
-        return id;
+    public int getObjectId() {
+        return objectId;
     }
 
     public Object invoke(Object proxy, Method method, Object[] args) {
 
-        if (method.getName().equals("getId")){
-            return id;
+        if (method.getName().equals("getObjectId")){
+            return objectId;
         }
 
 
-        MethodCall call = new MethodCall(id,method.getName(),args, method.getParameterTypes());
+        MethodParams call = new MethodParams(objectId,method.getName(),args, method.getParameterTypes());
         Streamable mqData = ClientContext.get().callServer(call);
 
         if (mqData instanceof CreateResult) {

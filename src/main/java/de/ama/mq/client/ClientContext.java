@@ -12,14 +12,17 @@ import de.ama.mq.stream.ErrorResult;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * Der Clientcontext verwaltet alle clientseitigen {@link RemoteObject}e. Hierüber können {@link RemoteObject}e erzeugt
+ * und wieder freigegeben werden.
+ */
 public class ClientContext {
+    private int    TIMEOUT = 30000;
     private Object monitor = new Object();
     private Connection connection;
     private Channel channel;
     private RpcClient rpcClient;
-    private int TIMEOUT = 30000;
-    private List<RemoteObjectProxyIfc> serviceProxies = new ArrayList<>();
-
+    private List<RemoteObjectProxyIfc> remoteObjectProxies = new ArrayList<>();
 
     private static ClientContext singleton;
 
@@ -54,17 +57,16 @@ public class ClientContext {
     public <T extends RemoteObject> T createRemoteObject(Class<T> ifc) {
         try {
 
-
             String implementationClassName = ifc.getName().replace("Ifc","");
             if (ifc.isAnnotationPresent(Implementation.class)){
                 implementationClassName = ifc.getAnnotation(Implementation.class).name();
             }
 
-            CreateCall call = new CreateCall(implementationClassName);
+            CreateParams call = new CreateParams(implementationClassName);
             Streamable mqData = callServer(call);
 
-            RemoteObjectProxyIfc serviceProxy = createRemoteObjectProxy(ifc, (CreateResult) mqData);
-            return (T) serviceProxy;
+            RemoteObjectProxyIfc objectProxy = createRemoteObjectProxy(ifc, (CreateResult) mqData);
+            return (T) objectProxy;
 
         } catch (RuntimeException re) {
             throw re;
@@ -74,24 +76,24 @@ public class ClientContext {
     }
 
     <T extends RemoteObject> RemoteObjectProxyIfc createRemoteObjectProxy(Class<T> ifc, CreateResult result) {
-        RemoteObjectProxyIfc serviceProxy = (RemoteObjectProxyIfc) java.lang.reflect.Proxy.newProxyInstance(ifc.getClassLoader(), new Class[]{ifc,RemoteObjectProxyIfc.class}, new RemoteObjectProxy(result.getId()));
+        RemoteObjectProxyIfc objectProxy = (RemoteObjectProxyIfc) java.lang.reflect.Proxy.newProxyInstance(ifc.getClassLoader(), new Class[]{ifc,RemoteObjectProxyIfc.class}, new RemoteObjectProxy(result.getObjectId()));
         synchronized (monitor){
-            serviceProxies.add(serviceProxy);
+            remoteObjectProxies.add(objectProxy);
         }
-        return serviceProxy;
+        return objectProxy;
     }
 
 
-    public void releaseService(RemoteObject remoteObject) {
+    public void releaseRemoteObject(RemoteObject remoteObject) {
         RemoteObjectProxyIfc proxy = (RemoteObjectProxyIfc) remoteObject;
-        ReleaseCall mqMessage = new ReleaseCall(proxy.getId());
+        ReleaseParams mqMessage = new ReleaseParams(proxy.getObjectId());
         callServer(mqMessage);
         removeProxy(remoteObject);
     }
 
     public void close() {
-        for (RemoteObjectProxyIfc serviceProxy : serviceProxies) {
-            releaseService(serviceProxy);
+        for (RemoteObjectProxyIfc proxy : remoteObjectProxies) {
+            releaseRemoteObject(proxy);
         }
     }
 
@@ -117,13 +119,13 @@ public class ClientContext {
 
     private void removeProxy(RemoteObject toRemove) {
         ArrayList<RemoteObjectProxyIfc> temp = new ArrayList<>();
-        for (RemoteObjectProxyIfc serviceProxy : serviceProxies) {
-            if (toRemove!=serviceProxy){
-                temp.add(serviceProxy);
+        for (RemoteObjectProxyIfc proxy : remoteObjectProxies) {
+            if (toRemove!=proxy){
+                temp.add(proxy);
             }
         }
         synchronized (monitor){
-            serviceProxies=temp;
+            remoteObjectProxies =temp;
         }
     }
 }
