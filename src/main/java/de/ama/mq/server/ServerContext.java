@@ -4,6 +4,7 @@ import com.rabbitmq.client.*;
 import de.ama.mq.RemoteObject;
 import de.ama.mq.stream.*;
 
+import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.lang.reflect.InvocationTargetException;
@@ -17,23 +18,28 @@ import java.util.Map;
  * {@link RemoteObject} weitergegeben.
  */
 public class ServerContext {
+    private static ServerContext singleton;
     private Map<Integer, RemoteObject> remoteObjectMap = new HashMap<>();
-    private static int idGenerator = 1;
 
     private Connection connection;
     private Channel channel;
     private RpcServer rpcServer;
+    private boolean verbose;
 
+    public static ServerContext get() {
+        return singleton;
+    }
 
-    public void start() {
+    public void start(String queueName) {
         try {
             ConnectionFactory factory = new ConnectionFactory();
             factory.setUri("amqp://ama:modrow@localhost");
             factory.setConnectionTimeout(300000);
             connection = factory.newConnection();
+            connection.clearBlockedListeners();
             channel = connection.createChannel();
-            channel.queueDeclare("rpc_queue", false, false, false, null);
-            rpcServer = new RpcServer(channel, "rpc_queue") {
+            channel.queueDeclare(queueName, false, false, false, null);
+            rpcServer = new RpcServer(channel, queueName) {
                 @Override
                 public byte[] handleCall(byte[] requestBody, AMQP.BasicProperties replyProperties) {
                     return executeCall(Streamable.fromBytes(requestBody)).toBytes();
@@ -41,11 +47,25 @@ public class ServerContext {
             };
 
 
-            System.out.println("**************************************");
-            System.out.println("* ServerContext successfully started *");
-            System.out.println("**************************************");
+            Thread thread = new Thread("rabbitmq mainloop") {
+                @Override
+                public void run() {
+                    try {
+                        rpcServer.mainloop();
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+                }
+            };
+            thread.setDaemon(true);
+            thread.start();
 
-            rpcServer.mainloop();
+            if (verbose){
+                System.out.println("**************************************");
+                System.out.println("* ServerContext successfully started *");
+                System.out.println("**************************************");
+            }
+            singleton = this;
 
         } catch (Exception e) {
             throw new RuntimeException(e);
@@ -57,19 +77,21 @@ public class ServerContext {
             if (data instanceof CreateParams) {
                 CreateParams call = (CreateParams) data;
                 int id = createRemoteObject(call.getClassName());
-                return new CreateResult(id);
+                return new Reference(id);
             } else if (data instanceof MethodParams) {
-                MethodParams params = (MethodParams) data;
-                RemoteObject remoteObject = getRemoteObject(params.getObjectId());
-                Method method = remoteObject.getClass().getMethod(params.getMethodName(), params.getParameterTypes());
-                Object result = method.invoke(remoteObject, params.getParameters());
+                MethodParams methodParams = (MethodParams) data;
+                Object[] parameters = methodParams.getParameters();
+                prepareParameters(parameters);
+                RemoteObject remoteObject = getRemoteObject(methodParams.getObjectId());
+                Method method = remoteObject.getClass().getMethod(methodParams.getMethodName(), methodParams.getParameterTypes());
+                Object result = method.invoke(remoteObject, parameters);
                 if (result instanceof RemoteObject){
-                    return new CreateResult(registerRemoteObject((RemoteObject) result));
+                    return new Reference(registerRemoteObject((RemoteObject) result));
                 } else {
                     return new MethodResult(result);
                 }
-            } else if (data instanceof ReleaseParams) {
-                ReleaseParams call = (ReleaseParams) data;
+            } else if (data instanceof Reference) {
+                Reference call = (Reference) data;
                 releaseRemoteObect(call.getObjectId());
                 return new Streamable();
             } else {
@@ -77,6 +99,18 @@ public class ServerContext {
             }
         } catch (Exception e) {
             return new ErrorResult(exceptionAsString(e));
+        }
+    }
+
+    private void prepareParameters(Object[] parameters) {
+        if (parameters==null) return;
+        for (int i = 0; i < parameters.length; i++) {
+            Object parameter = parameters[i];
+            if (parameter instanceof Reference) {
+                Reference reference = (Reference) parameter;
+                RemoteObject remoteObject = getRemoteObject(reference.getObjectId());
+                parameters[i]=remoteObject;
+            }
         }
     }
 
@@ -92,15 +126,6 @@ public class ServerContext {
         return registerRemoteObject(remoteObject);
     }
 
-    private int registerRemoteObject(RemoteObject remoteObject) {
-        int id = ++idGenerator;
-        synchronized (remoteObjectMap){
-            remoteObjectMap.put(id, remoteObject);
-        }
-        System.out.println("registered remote object: "+remoteObject.getClass().getSimpleName() + " id="+id);
-        return id;
-    }
-
     private RemoteObject getRemoteObject(int id) {
         synchronized (remoteObjectMap) {
             RemoteObject remoteObject = remoteObjectMap.get(id);
@@ -108,13 +133,31 @@ public class ServerContext {
         }
     }
 
-    private void releaseRemoteObect(int id) {
-        RemoteObject remoteObject;
+    private int registerRemoteObject(RemoteObject remoteObject) {
+        int id = remoteObject.hashCode();
         synchronized (remoteObjectMap){
-            remoteObject = remoteObjectMap.remove(id);
+            if (remoteObjectMap.put(id, remoteObject)==null && verbose){
+                System.out.println("registered remote object: "+remoteObject.getClass().getSimpleName() + " id="+id);
+            }
         }
-        System.out.println("released remote object: "+remoteObject.getClass().getSimpleName() + " id="+id);
+        return id;
+    }
+
+    private void releaseRemoteObect(int id) {
+        synchronized (remoteObjectMap){
+            RemoteObject removed = remoteObjectMap.remove(id);
+            if (removed !=null && verbose){
+                System.out.println("released remote object: "+removed.getClass().getSimpleName() + " id="+id);
+            }
+        }
     }
 
 
+    public int getSize() {
+        return remoteObjectMap.size();
+    }
+
+    public static void main(String[] args) {
+        new ServerContext().start("mandant1");
+    }
 }

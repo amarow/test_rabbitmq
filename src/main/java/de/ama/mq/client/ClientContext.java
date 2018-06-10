@@ -6,11 +6,13 @@ import com.rabbitmq.client.ConnectionFactory;
 import com.rabbitmq.client.RpcClient;
 import de.ama.mq.Implementation;
 import de.ama.mq.RemoteObject;
-import de.ama.mq.stream.*;
+import de.ama.mq.stream.CreateParams;
 import de.ama.mq.stream.ErrorResult;
+import de.ama.mq.stream.Reference;
+import de.ama.mq.stream.Streamable;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * Der Clientcontext verwaltet alle clientseitigen {@link RemoteObject}e. Hierüber können {@link RemoteObject}e erzeugt
@@ -18,19 +20,18 @@ import java.util.List;
  */
 public class ClientContext {
     private int    TIMEOUT = 30000;
-    private Object monitor = new Object();
     private Connection connection;
     private Channel channel;
     private RpcClient rpcClient;
-    private List<RemoteObjectProxyIfc> remoteObjectProxies = new ArrayList<>();
+    private Map<Integer,RemoteObjectProxyIfc> remoteObjectProxies = new HashMap<>();
 
     private static ClientContext singleton;
 
-    public static void start(String user, String pwd, String host) {
+    public static void start(String queuName) {
         if (singleton != null) {
             throw new RuntimeException("ClientContext allready started");
         }
-        singleton = new ClientContext(user, pwd, host);
+        singleton = new ClientContext(queuName);
     }
 
     public static ClientContext get() {
@@ -38,14 +39,15 @@ public class ClientContext {
     }
 
 
-    private ClientContext(String user, String pwd, String host) {
+    private ClientContext(String queueName) {
         try {
             ConnectionFactory factory = new ConnectionFactory();
-            factory.setUri("amqp://" + user + ":" + pwd + "@" + host);
+            factory.setUri("amqp://ama:modrow@localhost");
             factory.setConnectionTimeout(TIMEOUT);
             connection = factory.newConnection();
+            connection.clearBlockedListeners();
             channel = connection.createChannel();
-            rpcClient = new RpcClient(channel, "", "rpc_queue", TIMEOUT);
+            rpcClient = new RpcClient(channel, "", queueName, TIMEOUT);
 
         } catch (Exception e) {
             throw new RuntimeException(e);
@@ -65,7 +67,7 @@ public class ClientContext {
             CreateParams call = new CreateParams(implementationClassName);
             Streamable mqData = callServer(call);
 
-            RemoteObjectProxyIfc objectProxy = createRemoteObjectProxy(ifc, (CreateResult) mqData);
+            RemoteObjectProxyIfc objectProxy = getOrCreateProxy(ifc, (Reference) mqData);
             return (T) objectProxy;
 
         } catch (RuntimeException re) {
@@ -75,24 +77,29 @@ public class ClientContext {
         }
     }
 
-    <T extends RemoteObject> RemoteObjectProxyIfc createRemoteObjectProxy(Class<T> ifc, CreateResult result) {
-        RemoteObjectProxyIfc objectProxy = (RemoteObjectProxyIfc) java.lang.reflect.Proxy.newProxyInstance(ifc.getClassLoader(), new Class[]{ifc,RemoteObjectProxyIfc.class}, new RemoteObjectProxy(result.getObjectId()));
-        synchronized (monitor){
-            remoteObjectProxies.add(objectProxy);
+    <T extends RemoteObject> RemoteObjectProxyIfc getOrCreateProxy(Class<T> ifc, Reference reference) {
+        synchronized (remoteObjectProxies){
+            RemoteObjectProxyIfc proxy = remoteObjectProxies.get(reference.getObjectId());
+            if (proxy==null){
+                proxy = (RemoteObjectProxyIfc) java.lang.reflect.Proxy.newProxyInstance(ifc.getClassLoader(),
+                        new Class[]{ifc,RemoteObjectProxyIfc.class},
+                        new RemoteObjectProxy(reference.getObjectId()));
+                remoteObjectProxies.put(proxy.getObjectId(),proxy);
+            }
+            return proxy;
         }
-        return objectProxy;
     }
 
 
     public void releaseRemoteObject(RemoteObject remoteObject) {
         RemoteObjectProxyIfc proxy = (RemoteObjectProxyIfc) remoteObject;
-        ReleaseParams mqMessage = new ReleaseParams(proxy.getObjectId());
+        Reference mqMessage = new Reference(proxy.getObjectId());
         callServer(mqMessage);
-        removeProxy(remoteObject);
+        removeProxy(proxy);
     }
 
     public void close() {
-        for (RemoteObjectProxyIfc proxy : remoteObjectProxies) {
+        for (RemoteObjectProxyIfc proxy : remoteObjectProxies.values()) {
             releaseRemoteObject(proxy);
         }
     }
@@ -117,15 +124,9 @@ public class ClientContext {
         }
     }
 
-    private void removeProxy(RemoteObject toRemove) {
-        ArrayList<RemoteObjectProxyIfc> temp = new ArrayList<>();
-        for (RemoteObjectProxyIfc proxy : remoteObjectProxies) {
-            if (toRemove!=proxy){
-                temp.add(proxy);
-            }
-        }
-        synchronized (monitor){
-            remoteObjectProxies =temp;
+    private void removeProxy(RemoteObjectProxyIfc toRemove) {
+        synchronized (remoteObjectProxies){
+            remoteObjectProxies.remove(toRemove.getObjectId());
         }
     }
 }
